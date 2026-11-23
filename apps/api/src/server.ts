@@ -31,5 +31,7 @@ const shutdown = async () => {
   await prisma.$disconnect();
   process.exit(0);
 };
+// A failed background job must never take the API down during a live match.
+process.on('unhandledRejection', (e) => console.error('Unhandled rejection', e));
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

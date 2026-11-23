@@ -23,9 +23,15 @@ export function createApp() {
   app.use(cors({ origin: config.webOrigin, credentials: true }));
   app.use(express.json({ limit: '2mb' }));
 
+  // Used by the mobile app's connection test and by deploy checks. Never throws: a missing
+  // database is reported as 503 instead of crashing the server.
   app.get('/api/health', async (_req, res) => {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, time: new Date().toISOString() });
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ ok: true, database: 'up', time: new Date().toISOString() });
+    } catch {
+      res.status(503).json({ ok: false, database: 'down', time: new Date().toISOString() });
+    }
   });
 
   app.use('/api/ingest', ingestRouter);

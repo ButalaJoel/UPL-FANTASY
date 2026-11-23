@@ -36,7 +36,7 @@ export function LoginPage() {
     setError(null);
     try {
       const r = await api<{ token: string; user: Me }>('/auth/login', { body: { email, password } });
-      signIn(r.token, r.user);
+      await signIn(r);
       nav(params.get('next') ?? (r.user.canAccessOps ? '/ops' : '/my-team'), { replace: true });
     } catch (err) {
       setError(err);
@@ -94,7 +94,7 @@ export function RegisterPage() {
     setError(null);
     try {
       const r = await api<{ token: string; user: Me }>('/auth/register', { body: form });
-      signIn(r.token, r.user);
+      await signIn(r);
       nav('/create-team', { replace: true });
     } catch (err) {
       setError(err);

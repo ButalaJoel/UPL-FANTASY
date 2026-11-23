@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { formationOf, parseFormation, validateLineup, type LineupPick, type Position } from '@kiwanja/core';
+import { applyFormation, canSwap as canSwapIn, currentFormation, draftFromSquad, lineupChanged, lineupIssues, lineupPayload, makeCaptain, makeViceCaptain, swap as swapIn, type LineupDraft, type MyTeamResponse, type LivePick, type TeamGameweekView } from '@kiwanja/client';
 import clsx from 'clsx';
 import { ArrowLeftRight, Info, Repeat } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -7,54 +7,11 @@ import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { Avatar } from '../../components/brand';
 import { Pitch, type PitchSlot } from '../../components/Pitch';
 import { Countdown, Empty, ErrorBox, Loading, Modal, PageHeader, Stat, Tabs } from '../../components/ui';
-import { useMeta, useGameweeks, type Player } from '../../hooks/data';
+import { useMeta, useGameweeks } from '../../hooks/data';
 import { api } from '../../lib/api';
 import { dateTime, price } from '../../lib/format';
 
-interface SquadEntry {
-  id: string;
-  playerId: string;
-  slot: number;
-  isCaptain: boolean;
-  isViceCaptain: boolean;
-  purchasePrice: number;
-  nextOpponent: string | null;
-  player: Player;
-}
-interface PointsLine { code: string; label: string; value: number; points: number }
-interface LivePick {
-  playerId: string;
-  slot: number;
-  isCaptain: boolean;
-  isViceCaptain: boolean;
-  position: Position;
-  player: Player;
-  provisionalPoints: number;
-  confirmedPoints: number;
-  minutes: number;
-  multiplier: number;
-  counted: boolean;
-  subbedIn: boolean;
-  subbedOut: boolean;
-  teamPoints: number;
-  breakdown: { fixtureId: string; provisional: PointsLine[]; confirmed: PointsLine[]; fixtureStatus: string }[];
-}
-export interface TeamGameweekView {
-  score: { provisional: number; confirmed: number; transferCost: number; transfersMade: number; net: number } | null;
-  autoSubs: { outId: string; inId: string }[];
-  multiplierTo: string | null;
-  picks: LivePick[];
-}
-interface MyTeamResponse {
-  team: { id: string; name: string; bank: number; totalPoints: number; confirmedTotal: number; freeTransfers: number } | null;
-  rank: number;
-  squad: SquadEntry[];
-  squadValue: number;
-  currentGameweek: { id: string; number: number; name: string; status: string } | null;
-  nextGameweek: { id: string; number: number; name: string; deadlineAt: string } | null;
-  live: TeamGameweekView | null;
-  transfersInfo: { freeTransfers: number; unlimited: boolean; hitCost: number; wildcardsLeft: number; wildcardActive: boolean };
-}
+export type { TeamGameweekView };
 
 export const useMyTeam = () => useQuery({ queryKey: ['fantasy', 'me'], queryFn: () => api<MyTeamResponse>('/fantasy/me') });
 
@@ -208,68 +165,27 @@ function PointsBreakdown({ pick }: { pick: LivePick }) {
   );
 }
 
-interface Draft extends LineupPick {
-  player: Player;
-  nextOpponent: string | null;
-}
+type Draft = LineupDraft;
 
 function PickTeam({ data }: { data: MyTeamResponse }) {
   const qc = useQueryClient();
   const { data: meta } = useMeta();
   const rules = meta!.rules;
-  const initial = useMemo<Draft[]>(() => data.squad.map((s) => ({ playerId: s.playerId, position: s.player.position, slot: s.slot, isCaptain: s.isCaptain, isViceCaptain: s.isViceCaptain, player: s.player, nextOpponent: s.nextOpponent })), [data.squad]);
+  const initial = useMemo<Draft[]>(() => draftFromSquad(data.squad), [data.squad]);
   const [draft, setDraft] = useState<Draft[]>(initial);
   const [sel, setSel] = useState<string | null>(null);
   const [swapFrom, setSwapFrom] = useState<string | null>(null);
   useEffect(() => setDraft(initial), [initial]);
   const n = rules.squad.startersCount;
-  const issues = validateLineup(draft, rules);
-  const dirty = JSON.stringify(draft.map((d) => [d.playerId, d.slot, d.isCaptain, d.isViceCaptain])) !== JSON.stringify(initial.map((d) => [d.playerId, d.slot, d.isCaptain, d.isViceCaptain]));
+  const issues = lineupIssues(draft, rules);
+  const dirty = lineupChanged(draft, initial);
   const save = useMutation({
-    mutationFn: () => api('/fantasy/lineup', { method: 'PUT', body: { picks: draft.map(({ playerId, slot, isCaptain, isViceCaptain }) => ({ playerId, slot, isCaptain, isViceCaptain })) } }),
+    mutationFn: () => api('/fantasy/lineup', { method: 'PUT', body: { picks: lineupPayload(draft) } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fantasy'] }),
   });
-
-  const swap = (a: string, b: string) => {
-    const pa = draft.find((d) => d.playerId === a)!;
-    const pb = draft.find((d) => d.playerId === b)!;
-    const next = draft.map((d) => {
-      if (d.playerId === a) return { ...d, slot: pb.slot, isCaptain: pb.slot > n ? false : d.isCaptain, isViceCaptain: pb.slot > n ? false : d.isViceCaptain };
-      if (d.playerId === b) return { ...d, slot: pa.slot, isCaptain: pa.slot > n ? false : d.isCaptain, isViceCaptain: pa.slot > n ? false : d.isViceCaptain };
-      return d;
-    });
-    // Keep an armband holder if one moved to the bench.
-    const starters = next.filter((d) => d.slot <= n);
-    if (!next.some((d) => d.isCaptain)) {
-      const c = starters.find((d) => !d.isViceCaptain);
-      if (c) c.isCaptain = true;
-    }
-    if (!next.some((d) => d.isViceCaptain)) {
-      const v = starters.find((d) => !d.isCaptain);
-      if (v) v.isViceCaptain = true;
-    }
-    setDraft([...next]);
-  };
-
-  const canSwap = (a: string, b: string) => {
-    const pa = draft.find((d) => d.playerId === a)!;
-    const pb = draft.find((d) => d.playerId === b)!;
-    if ((pa.slot <= n) === (pb.slot <= n)) return pa.slot > n && pb.slot > n && pa.position !== 'GK' && pb.position !== 'GK'; // reorder bench
-    const test = draft.map((d) => (d.playerId === a ? { ...d, slot: pb.slot } : d.playerId === b ? { ...d, slot: pa.slot } : d));
-    return !validateLineup(test.map((d) => ({ ...d, isCaptain: false, isViceCaptain: false })), rules).some((i) => i.code === 'FORMATION' || i.code === 'GK');
-  };
-
-  const setFormation = (f: string) => {
-    const shape = parseFormation(f);
-    const ordered = [...draft].sort((a, b) => (a.slot <= n ? 0 : 1) - (b.slot <= n ? 0 : 1) || b.player.price - a.player.price);
-    const starters: Draft[] = [];
-    for (const pos of ['GK', 'DEF', 'MID', 'FWD'] as Position[]) starters.push(...ordered.filter((d) => d.position === pos).slice(0, shape[pos]));
-    const bench = draft.filter((d) => !starters.includes(d)).sort((a, b) => (a.position === 'GK' ? -1 : b.position === 'GK' ? 1 : a.slot - b.slot));
-    const next = [...starters, ...bench].map((d, i) => ({ ...d, slot: i + 1 }));
-    if (!next.some((d) => d.isCaptain && d.slot <= n)) next.forEach((d) => (d.isCaptain = d === next.find((x) => x.slot <= n && !x.isViceCaptain)));
-    if (!next.some((d) => d.isViceCaptain && d.slot <= n)) next.forEach((d) => (d.isViceCaptain = d === next.find((x) => x.slot <= n && !x.isCaptain)));
-    setDraft(next);
-  };
+  const swap = (a: string, b: string) => setDraft(swapIn(draft, a, b, rules));
+  const canSwap = (a: string, b: string) => canSwapIn(draft, a, b, rules);
+  const setFormation = (f: string) => setDraft(applyFormation(draft, f, rules));
 
   const onSelect = (id: string) => {
     if (swapFrom) {
@@ -293,7 +209,7 @@ function PickTeam({ data }: { data: MyTeamResponse }) {
   });
   const sorted = [...draft].sort((a, b) => a.slot - b.slot);
   const selected = draft.find((d) => d.playerId === sel);
-  const formation = formationOf(draft.filter((d) => d.slot <= n));
+  const formation = currentFormation(draft, rules);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -343,15 +259,7 @@ function PickTeam({ data }: { data: MyTeamResponse }) {
               className="btn-ghost justify-start"
               disabled={selected.slot > n || selected.isCaptain}
               onClick={() => {
-                // If the new captain was vice-captain, the old captain takes the vice armband.
-                const oldCaptain = draft.find((d) => d.isCaptain)?.playerId;
-                setDraft(
-                  draft.map((d) => ({
-                    ...d,
-                    isCaptain: d.playerId === selected.playerId,
-                    isViceCaptain: selected.isViceCaptain ? d.playerId === oldCaptain : d.isViceCaptain,
-                  })),
-                );
+                setDraft(makeCaptain(draft, selected.playerId));
                 setSel(null);
               }}
             >
@@ -361,13 +269,7 @@ function PickTeam({ data }: { data: MyTeamResponse }) {
               className="btn-ghost justify-start"
               disabled={selected.slot > n || selected.isViceCaptain}
               onClick={() => {
-                setDraft(
-                  draft.map((d) => {
-                    if (d.playerId === selected.playerId) return { ...d, isViceCaptain: true, isCaptain: false };
-                    if (selected.isCaptain && d.isViceCaptain) return { ...d, isViceCaptain: false, isCaptain: true };
-                    return { ...d, isViceCaptain: false };
-                  }),
-                );
+                setDraft(makeViceCaptain(draft, selected.playerId));
                 setSel(null);
               }}
             >

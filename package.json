@@ -4,12 +4,15 @@
   "version": "0.1.0",
   "description": "Kiwanja: Uganda fantasy football + live match-data platform (prototype)",
   "packageManager": "pnpm@10.28.0",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "dev": "pnpm --parallel --filter @kiwanja/api --filter @kiwanja/web dev",
     "dev:api": "pnpm --filter @kiwanja/api dev",
     "dev:web": "pnpm --filter @kiwanja/web dev",
+    "dev:mobile": "pnpm --filter @kiwanja/mobile start",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",

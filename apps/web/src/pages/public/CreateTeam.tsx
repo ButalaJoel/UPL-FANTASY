@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { POSITIONS, validateSquad, type Position } from '@kiwanja/core';
+import { POSITIONS, type Position } from '@kiwanja/core';
+import { addBlocker, autoFill as autoFillSquad, squadComplete, squadIssues, squadSpend } from '@kiwanja/client';
 import { Shuffle, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -22,19 +23,10 @@ export function CreateTeamPage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
-  const spent = picked.reduce((s, p) => s + p.price, 0);
-  const left = rules.squad.budget - spent;
-  const squad = picked.map((p) => ({ playerId: p.id, position: p.position, clubId: p.clubId, price: p.price }));
-  const issues = useMemo(() => validateSquad(squad, rules, { partial: true }), [squad, rules]);
-  const complete = picked.length === rules.squad.size && !validateSquad(squad, rules).length;
-
-  const canAdd = (p: Player) => {
-    if (picked.some((x) => x.id === p.id)) return 'Selected';
-    if (picked.filter((x) => x.position === p.position).length >= rules.squad.composition[p.position]) return `${p.position} full`;
-    if (picked.filter((x) => x.clubId === p.clubId).length >= rules.squad.maxPerClub) return `${rules.squad.maxPerClub} from club`;
-    if (p.price > left) return 'Too expensive';
-    return null;
-  };
+  const left = rules.squad.budget - squadSpend(picked);
+  const issues = useMemo(() => squadIssues(picked, rules), [picked, rules]);
+  const complete = squadComplete(picked, rules);
+  const canAdd = (p: Player) => addBlocker(picked, p, rules);
 
   const slots: PitchSlot[] = POSITIONS.flatMap((pos) => {
     const mine = picked.filter((p) => p.position === pos);
@@ -46,22 +38,7 @@ export function CreateTeamPage() {
     });
   });
 
-  const autoFill = () => {
-    const pool = [...(all.data?.players ?? [])].filter((p) => p.status === 'AVAILABLE').sort(() => Math.random() - 0.5);
-    const next = [...picked];
-    for (const pos of ['GK', 'FWD', 'MID', 'DEF'] as Position[]) {
-      for (const p of pool) {
-        const need = rules.squad.composition[pos] - next.filter((x) => x.position === pos).length;
-        if (need <= 0) break;
-        if (p.position !== pos || next.some((x) => x.id === p.id)) continue;
-        if (next.filter((x) => x.clubId === p.clubId).length >= rules.squad.maxPerClub) continue;
-        const remainingSlots = rules.squad.size - next.length - 1;
-        if (rules.squad.budget - next.reduce((s, x) => s + x.price, 0) - p.price < remainingSlots * 45) continue;
-        next.push(p);
-      }
-    }
-    setPicked(next);
-  };
+  const autoFill = () => setPicked(autoFillSquad(picked, all.data?.players ?? [], rules));
 
   const submit = async () => {
     setBusy(true);

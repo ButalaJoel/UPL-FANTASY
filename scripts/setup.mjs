@@ -118,6 +118,8 @@ ${green(bold('✔ Kiwanja is set up.'))}
   Fantasy app   http://localhost:5173
   Data Ops app  http://localhost:5173/ops
   API           http://localhost:4000/api/health
+  Mobile app    run "pnpm dev:mobile" in a second terminal, then scan the QR code
+                with Expo Go on a phone on the same Wi-Fi
 
   Demo logins (password ${bold('kiwanja123')}):
     fan@kiwanja.test          fantasy manager

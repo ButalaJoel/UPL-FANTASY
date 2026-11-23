@@ -6,8 +6,15 @@
       "type": "shell",
       "command": "node scripts/setup.mjs",
       "problemMatcher": [],
-      "group": { "kind": "build", "isDefault": true },
-      "presentation": { "panel": "dedicated", "reveal": "always", "focus": true }
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "focus": true
+      }
     },
     {
       "label": "Kiwanja: Run apps",
@@ -15,7 +22,30 @@
       "command": "pnpm dev",
       "isBackground": true,
       "problemMatcher": [],
-      "presentation": { "panel": "dedicated", "reveal": "always" }
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "Kiwanja: Run mobile app (Expo Go)",
+      "type": "shell",
+      "command": "pnpm dev:mobile",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "focus": true
+      }
+    },
+    {
+      "label": "Kiwanja: Run everything (API + web + mobile)",
+      "dependsOn": [
+        "Kiwanja: Run apps",
+        "Kiwanja: Run mobile app (Expo Go)"
+      ],
+      "problemMatcher": []
     },
     {
       "label": "Kiwanja: Start database (Docker)",
@@ -33,14 +63,19 @@
       "label": "Kiwanja: Run all tests",
       "type": "shell",
       "command": "pnpm test",
-      "group": { "kind": "test", "isDefault": true },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
       "problemMatcher": []
     },
     {
       "label": "Kiwanja: Type check",
       "type": "shell",
       "command": "pnpm typecheck",
-      "problemMatcher": ["$tsc"]
+      "problemMatcher": [
+        "$tsc"
+      ]
     }
   ]
 }

@@ -6,21 +6,10 @@ import { ClubCrest } from '../../components/brand';
 import { PlayerMarket } from '../../components/PlayerMarket';
 import { Empty, ErrorBox, Loading, Modal, PageHeader, PosChip, Stat } from '../../components/ui';
 import { useMeta, type Player } from '../../hooks/data';
+import { buyBlocker, squadAfter, type TransferPreview as Preview } from '@kiwanja/client';
 import { api } from '../../lib/api';
 import { dateTime, price } from '../../lib/format';
 import { useMyTeam } from './MyTeam';
-
-interface Preview {
-  gameweek: number;
-  count: number;
-  cost: number;
-  freeUsed: number;
-  freeTransfers: number;
-  bankAfter: number;
-  unlimited: boolean;
-  wildcard: boolean;
-  issues: { code: string; message: string }[];
-}
 
 export function TransfersPage() {
   const qc = useQueryClient();
@@ -58,20 +47,12 @@ export function TransfersPage() {
   if (!data?.team) return <Navigate to="/create-team" replace />;
   if (!data.nextGameweek) return <Empty title="No upcoming gameweek">Transfers open again when the next gameweek is scheduled.</Empty>;
 
-  const outIds = new Set(pending.map((p) => p.out.id));
   const inIds = new Set(pending.map((p) => p.in.id));
-  const squad = data.squad.map((s) => s.player).filter((p) => !outIds.has(p.id));
-  const current = [...squad, ...pending.map((p) => p.in)];
-  const bank = data.team.bank + pending.reduce((s, p) => s + p.out.price - p.in.price, 0);
+  const after = squadAfter(data.squad.map((s) => s.player), pending, data.team.bank);
+  const current = after.players;
+  const bank = after.bank;
   const info = data.transfersInfo;
-
-  const buyReason = (p: Player, out: Player) => {
-    if (current.some((x) => x.id === p.id) || inIds.has(p.id)) return 'In squad';
-    const clubCount = current.filter((x) => x.clubId === p.clubId && x.id !== out.id).length;
-    if (clubCount >= meta.rules.squad.maxPerClub) return `${meta.rules.squad.maxPerClub} from club`;
-    if (p.price > bank + out.price) return 'Too expensive';
-    return null;
-  };
+  const buyReason = (p: Player, out: Player) => buyBlocker(current, bank, out, p, meta.rules);
 
   return (
     <div>

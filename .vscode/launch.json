@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Kiwanja: Setup and run everything",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/setup.mjs",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "API server (debug)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/apps/api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "tsx", "watch", "--clear-screen=false", "src/server.ts"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Web app (Vite)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/apps/web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev"],
+      "console": "integratedTerminal",
+      "serverReadyAction": { "pattern": "Local:\\s+(https?://\\S+)", "uriFormat": "%s", "action": "openExternally" }
+    },
+    {
+      "name": "API tests (Section 15 demo)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/apps/api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "vitest", "run"],
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Kiwanja: API + Web (database already set up)",
+      "configurations": ["API server (debug)", "Web app (Vite)"],
+      "stopAll": true
+    }
+  ]
+}

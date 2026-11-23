@@ -1,0 +1,855 @@
+// Kiwanja platform database.
+// Three clearly separated layers:
+//   1. Football data     (clubs, players, fixtures, squads)                  -> what exists
+//   2. Match events      (match_events + verifications + corrections)       -> what happened (source of truth)
+//   3. Derived results   (player_match_stats, player_fixture_points,
+//                         fantasy_gameweek_scores)                          -> calculated, always rebuildable from 2
+// Fantasy and competition tables sit on top. A goal is a football event; the fantasy
+// points it earns are a calculated result and are never typed in by hand.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- enums ----------
+
+enum Role {
+  SUPER_ADMIN
+  COMPETITION_ADMIN
+  MATCH_SUPERVISOR
+  MATCH_ANALYST
+  FANTASY_USER
+}
+
+enum Position {
+  GK
+  DEF
+  MID
+  FWD
+}
+
+enum Side {
+  HOME
+  AWAY
+}
+
+/// Where a record came from: fictional sample, manual entry by our analysts, imported, device or video.
+enum RecordOrigin {
+  SAMPLE
+  MANUAL
+  IMPORTED
+  DEVICE
+  VIDEO
+}
+
+enum DataSourceKind {
+  MANUAL_LIVE
+  MANUAL_HISTORICAL
+  IMPORT
+  SAMPLE
+  TRACKING_DEVICE
+  VIDEO_ANALYTICS
+  PARTNER_FEED
+}
+
+enum PlayerStatus {
+  AVAILABLE
+  DOUBTFUL
+  INJURED
+  SUSPENDED
+  UNAVAILABLE
+}
+
+enum MatchStatus {
+  SCHEDULED
+  FIRST_HALF
+  HALF_TIME
+  SECOND_HALF
+  FULL_TIME
+  COMPLETED
+  PUBLISHED
+  POSTPONED
+}
+
+enum EventStatus {
+  PENDING
+  VERIFIED
+  DISPUTED
+  REJECTED
+  VOIDED
+}
+
+enum VerificationDecision {
+  AUTO
+  CONFIRM
+  DISPUTE
+  REJECT
+  RESOLVE_VERIFY
+  RESOLVE_REJECT
+  RESOLVE_VOID
+}
+
+enum AssignmentRole {
+  PRIMARY
+  VERIFIER
+  SUPERVISOR
+}
+
+enum StatBasis {
+  PROVISIONAL
+  CONFIRMED
+}
+
+enum GameweekStatus {
+  UPCOMING
+  LIVE
+  FINISHED
+  LOCKED
+}
+
+enum LeagueType {
+  CLASSIC
+  H2H
+}
+
+enum LeagueVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum CupMethod {
+  RANDOM
+  SEEDED
+}
+
+enum CupStatus {
+  DRAWN
+  RUNNING
+  FINISHED
+}
+
+// ---------- users & system ----------
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  passwordHash    String
+  displayName     String
+  role            Role      @default(FANTASY_USER)
+  active          Boolean   @default(true)
+  avatarColor     String    @default("#1F7A4D")
+  avatarUrl       String?
+  favouriteClubId String?
+  notifyGoals     Boolean   @default(true)
+  notifyDeadlines Boolean   @default(true)
+  isSample        Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  lastLoginAt     DateTime?
+
+  favouriteClub  Club?                @relation(fields: [favouriteClubId], references: [id], onDelete: SetNull)
+  resetTokens    PasswordResetToken[]
+  fantasyTeams   FantasyTeam[]
+  assignments    AnalystAssignment[]
+  eventsRecorded MatchEvent[]         @relation("recordedBy")
+  verifications  EventVerification[]
+  corrections    EventCorrection[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+  leaguesOwned   FantasyLeague[]
+  syncLogs       SyncLog[]
+
+  @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_reset_tokens")
+}
+
+model AppSetting {
+  key         String   @id
+  value       Json
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+
+  @@map("app_settings")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  data      Json?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+/// Server-side record of each offline sync batch received from an analyst device.
+model SyncLog {
+  id         String   @id @default(cuid())
+  userId     String
+  fixtureId  String
+  deviceId   String?
+  received   Int
+  created    Int
+  duplicates Int
+  conflicts  Int
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([fixtureId])
+  @@map("sync_queue")
+}
+
+model DataSource {
+  id          String         @id @default(cuid())
+  name        String         @unique
+  kind        DataSourceKind
+  url         String?
+  attribution String?
+  licence     String?
+  notes       String?
+  /// Hash of the API key a device / partner uses to push data (future tracking hardware, video analytics).
+  apiKeyHash  String?
+  active      Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+
+  clubs    Club[]
+  players  Player[]
+  fixtures Fixture[]
+  events   MatchEvent[]
+  metrics  PlayerMetric[]
+
+  @@map("data_sources")
+}
+
+// ---------- football data ----------
+
+model Competition {
+  id        String       @id @default(cuid())
+  name      String
+  shortName String
+  country   String       @default("Uganda")
+  origin    RecordOrigin @default(SAMPLE)
+  seasons   Season[]
+  fixtures  Fixture[]
+
+  @@map("competitions")
+}
+
+model Season {
+  id            String          @id @default(cuid())
+  competitionId String
+  name          String
+  startDate     DateTime
+  endDate       DateTime
+  isCurrent     Boolean         @default(false)
+  competition   Competition     @relation(fields: [competitionId], references: [id])
+  gameweeks     Gameweek[]
+  fixtures      Fixture[]
+  fantasyTeams  FantasyTeam[]
+  leagues       FantasyLeague[]
+  cups          FantasyCup[]
+
+  @@unique([competitionId, name])
+  @@map("seasons")
+}
+
+model Club {
+  id             String       @id @default(cuid())
+  name           String       @unique
+  shortName      String       @unique
+  city           String?
+  stadium        String?
+  primaryColor   String
+  secondaryColor String
+  origin         RecordOrigin @default(MANUAL)
+  sourceId       String?
+  createdAt      DateTime     @default(now())
+
+  source      DataSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  players     Player[]
+  homeMatches Fixture[]   @relation("home")
+  awayMatches Fixture[]   @relation("away")
+  fans        User[]
+
+  @@map("clubs")
+}
+
+model Player {
+  id          String       @id @default(cuid())
+  firstName   String
+  lastName    String
+  clubId      String
+  position    Position
+  shirtNumber Int?
+  /// Price in tenths: 55 = 5.5m.
+  price       Int
+  status      PlayerStatus @default(AVAILABLE)
+  statusNote  String?
+  nationality String?
+  origin      RecordOrigin @default(MANUAL)
+  sourceId    String?
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  club            Club                   @relation(fields: [clubId], references: [id])
+  source          DataSource?            @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  squadEntries    MatchSquadEntry[]
+  events          MatchEvent[]           @relation("eventPlayer")
+  secondaryEvents MatchEvent[]           @relation("eventSecondary")
+  matchStats      PlayerMatchStat[]
+  fixturePoints   PlayerFixturePoints[]
+  fantasySquads   FantasySquadPlayer[]
+  gameweekPicks   FantasyGameweekPick[]
+  transfersOut    FantasyTransfer[]      @relation("out")
+  transfersIn     FantasyTransfer[]      @relation("in")
+  priceChanges    PlayerPriceChange[]
+  metrics         PlayerMetric[]
+
+  @@index([clubId])
+  @@index([position])
+  @@map("players")
+}
+
+model PlayerPriceChange {
+  id         String   @id @default(cuid())
+  playerId   String
+  gameweekId String?
+  oldPrice   Int
+  newPrice   Int
+  reason     String
+  createdAt  DateTime @default(now())
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId])
+  @@map("player_price_changes")
+}
+
+model Gameweek {
+  id         String         @id @default(cuid())
+  seasonId   String
+  number     Int
+  name       String
+  deadlineAt DateTime
+  status     GameweekStatus @default(UPCOMING)
+  isCurrent  Boolean        @default(false)
+  lockedAt   DateTime?
+  season     Season         @relation(fields: [seasonId], references: [id])
+
+  fixtures  Fixture[]
+  picks     FantasyGameweekPick[]
+  scores    FantasyGameweekScore[]
+  transfers FantasyTransfer[]
+  points    PlayerFixturePoints[]
+  h2h       HeadToHeadMatch[]
+
+  @@unique([seasonId, number])
+  @@map("gameweeks")
+}
+
+model Fixture {
+  id              String       @id @default(cuid())
+  seasonId        String
+  competitionId   String
+  gameweekId      String?
+  homeClubId      String
+  awayClubId      String
+  kickoffAt       DateTime
+  venue           String?
+  status          MatchStatus  @default(SCHEDULED)
+  homeScore       Int          @default(0)
+  awayScore       Int          @default(0)
+  /// When the current period's clock started.
+  periodStartedAt DateTime?
+  clockAdjustSec  Int          @default(0)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  completedAt     DateTime?
+  publishedAt     DateTime?
+  origin          RecordOrigin @default(MANUAL)
+  sourceId        String?
+  notes           String?
+  createdAt       DateTime     @default(now())
+
+  season      Season                @relation(fields: [seasonId], references: [id])
+  competition Competition           @relation(fields: [competitionId], references: [id])
+  gameweek    Gameweek?             @relation(fields: [gameweekId], references: [id], onDelete: SetNull)
+  homeClub    Club                  @relation("home", fields: [homeClubId], references: [id])
+  awayClub    Club                  @relation("away", fields: [awayClubId], references: [id])
+  source      DataSource?           @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  squad       MatchSquadEntry[]
+  assignments AnalystAssignment[]
+  events      MatchEvent[]
+  playerStats PlayerMatchStat[]
+  teamStats   TeamMatchStat[]
+  points      PlayerFixturePoints[]
+  metrics     PlayerMetric[]
+
+  @@index([gameweekId])
+  @@index([status])
+  @@index([kickoffAt])
+  @@map("fixtures")
+}
+
+/// Match squads and starting line-ups (isStarter) registered before kick-off.
+model MatchSquadEntry {
+  id          String   @id @default(cuid())
+  fixtureId   String
+  playerId    String
+  side        Side
+  isStarter   Boolean
+  shirtNumber Int?
+  position    Position
+  fixture     Fixture  @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  player      Player   @relation(fields: [playerId], references: [id])
+
+  @@unique([fixtureId, playerId])
+  @@index([fixtureId, side])
+  @@map("match_squads")
+}
+
+model AnalystAssignment {
+  id        String         @id @default(cuid())
+  fixtureId String
+  userId    String
+  role      AssignmentRole
+  createdAt DateTime       @default(now())
+  fixture   Fixture        @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([fixtureId, userId])
+  @@map("analyst_assignments")
+}
+
+// ---------- match events (source of truth) ----------
+
+model EventType {
+  code                 String       @id
+  label                String
+  category             String
+  needsPlayer          Boolean
+  requiresVerification Boolean
+  enabled              Boolean      @default(true)
+  extended             Boolean      @default(false)
+  description          String
+  sortOrder            Int
+  events               MatchEvent[]
+
+  @@map("event_types")
+}
+
+model MatchEvent {
+  id                String       @id @default(cuid())
+  fixtureId         String
+  /// Generated on the analyst's device: makes offline replays idempotent.
+  clientEventId     String       @unique
+  sequence          Int
+  code              String
+  side              Side?
+  playerId          String?
+  secondaryPlayerId String?
+  minute            Int
+  details           Json?
+  status            EventStatus  @default(PENDING)
+  origin            RecordOrigin @default(MANUAL)
+  sourceId          String?
+  recordedById      String
+  /// When the analyst tapped (device clock), preserved through offline queues.
+  clientRecordedAt  DateTime
+  /// When the server received it.
+  recordedAt        DateTime     @default(now())
+  version           Int          @default(1)
+  verifiedAt        DateTime?
+  updatedAt         DateTime     @updatedAt
+
+  fixture         Fixture             @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  type            EventType           @relation(fields: [code], references: [code])
+  player          Player?             @relation("eventPlayer", fields: [playerId], references: [id])
+  secondaryPlayer Player?             @relation("eventSecondary", fields: [secondaryPlayerId], references: [id])
+  recordedBy      User                @relation("recordedBy", fields: [recordedById], references: [id])
+  source          DataSource?         @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  verifications   EventVerification[]
+  corrections     EventCorrection[]
+
+  @@index([fixtureId, status])
+  @@index([playerId])
+  @@map("match_events")
+}
+
+model EventVerification {
+  id        String               @id @default(cuid())
+  eventId   String
+  userId    String?
+  decision  VerificationDecision
+  note      String?
+  createdAt DateTime             @default(now())
+  event     MatchEvent           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
+  @@map("event_verifications")
+}
+
+model EventCorrection {
+  id          String     @id @default(cuid())
+  eventId     String
+  userId      String
+  before      Json
+  after       Json
+  reason      String
+  versionFrom Int
+  versionTo   Int
+  createdAt   DateTime   @default(now())
+  event       MatchEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id])
+
+  @@index([eventId])
+  @@map("event_corrections")
+}
+
+/// Future tracking hardware / video analytics metrics, pushed through the ingest API.
+model PlayerMetric {
+  id         String      @id @default(cuid())
+  fixtureId  String
+  playerId   String
+  metric     String
+  value      Float
+  confidence Float?
+  sourceId   String?
+  recordedAt DateTime    @default(now())
+  fixture    Fixture     @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  player     Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  source     DataSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([fixtureId, playerId])
+  @@map("player_metrics")
+}
+
+// ---------- derived results (rebuildable from events) ----------
+
+model PlayerMatchStat {
+  id                String    @id @default(cuid())
+  fixtureId         String
+  playerId          String
+  basis             StatBasis
+  minutes           Int       @default(0)
+  started           Int       @default(0)
+  goals             Int       @default(0)
+  assists           Int       @default(0)
+  ownGoals          Int       @default(0)
+  goalsConceded     Int       @default(0)
+  cleanSheet        Int       @default(0)
+  yellowCards       Int       @default(0)
+  redCards          Int       @default(0)
+  penaltiesWon      Int       @default(0)
+  penaltiesMissed   Int       @default(0)
+  penaltiesSaved    Int       @default(0)
+  saves             Int       @default(0)
+  shotsOnTarget     Int       @default(0)
+  shotsOffTarget    Int       @default(0)
+  shotsBlocked      Int       @default(0)
+  keyPasses         Int       @default(0)
+  bigChancesCreated Int       @default(0)
+  passesCompleted   Int       @default(0)
+  passesFailed      Int       @default(0)
+  tackles           Int       @default(0)
+  interceptions     Int       @default(0)
+  clearances        Int       @default(0)
+  fouls             Int       @default(0)
+  offsides          Int       @default(0)
+  corners           Int       @default(0)
+  manOfTheMatch     Int       @default(0)
+  updatedAt         DateTime  @updatedAt
+  fixture           Fixture   @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  player            Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([fixtureId, playerId, basis])
+  @@index([playerId, basis])
+  @@map("player_match_statistics")
+}
+
+model TeamMatchStat {
+  id        String    @id @default(cuid())
+  fixtureId String
+  side      Side
+  basis     StatBasis
+  stats     Json
+  updatedAt DateTime  @updatedAt
+  fixture   Fixture   @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+
+  @@unique([fixtureId, side, basis])
+  @@map("team_match_statistics")
+}
+
+/// Fantasy points a player earned in one fixture. Provisional (all live events) and confirmed (verified only).
+model PlayerFixturePoints {
+  id                    String   @id @default(cuid())
+  fixtureId             String
+  playerId              String
+  gameweekId            String?
+  provisionalPoints     Int      @default(0)
+  provisionalBreakdown  Json
+  confirmedPoints       Int      @default(0)
+  confirmedBreakdown    Json
+  minutes               Int      @default(0)
+  updatedAt             DateTime @updatedAt
+  fixture               Fixture  @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  player                Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  gameweek              Gameweek? @relation(fields: [gameweekId], references: [id], onDelete: SetNull)
+
+  @@unique([fixtureId, playerId])
+  @@index([gameweekId, playerId])
+  @@map("fantasy_points")
+}
+
+model ScoringRule {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  label        String
+  statKey      String
+  mode         String
+  unit         Int      @default(1)
+  min          Int?
+  max          Int?
+  minMinutes   Int      @default(0)
+  pointsGK     Int
+  pointsDEF    Int
+  pointsMID    Int
+  pointsFWD    Int
+  enabled      Boolean  @default(true)
+  experimental Boolean  @default(false)
+  sortOrder    Int
+  description  String?
+  updatedAt    DateTime @updatedAt
+
+  @@map("scoring_rules")
+}
+
+// ---------- fantasy ----------
+
+model FantasyTeam {
+  id                String       @id @default(cuid())
+  userId            String
+  seasonId          String
+  name              String
+  /// Money in the bank, tenths.
+  bank              Int
+  freeTransfers     Int          @default(1)
+  wildcardsUsed     Int          @default(0)
+  wildcardGameweek  Int?
+  totalPoints       Int          @default(0)
+  confirmedTotal    Int          @default(0)
+  /// First gameweek this team plays.
+  startGameweek     Int          @default(1)
+  origin            RecordOrigin @default(MANUAL)
+  createdAt         DateTime     @default(now())
+
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  season    Season                 @relation(fields: [seasonId], references: [id])
+  squad     FantasySquadPlayer[]
+  picks     FantasyGameweekPick[]
+  transfers FantasyTransfer[]
+  scores    FantasyGameweekScore[]
+  leagues   LeagueMember[]
+
+  @@unique([userId, seasonId])
+  @@index([totalPoints])
+  @@map("fantasy_teams")
+}
+
+/// Current squad (fantasy_players) with the line-up for the next deadline.
+model FantasySquadPlayer {
+  id            String      @id @default(cuid())
+  teamId        String
+  playerId      String
+  purchasePrice Int
+  slot          Int
+  isCaptain     Boolean     @default(false)
+  isViceCaptain Boolean     @default(false)
+  team          FantasyTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player        Player      @relation(fields: [playerId], references: [id])
+
+  @@unique([teamId, playerId])
+  @@unique([teamId, slot])
+  @@map("fantasy_squads")
+}
+
+/// Line-up frozen at a gameweek deadline: captain, vice-captain and bench order (captain_selections, bench_selections).
+model FantasyGameweekPick {
+  id            String      @id @default(cuid())
+  teamId        String
+  gameweekId    String
+  playerId      String
+  position      Position
+  slot          Int
+  isCaptain     Boolean
+  isViceCaptain Boolean
+  team          FantasyTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  gameweek      Gameweek    @relation(fields: [gameweekId], references: [id], onDelete: Cascade)
+  player        Player      @relation(fields: [playerId], references: [id])
+
+  @@unique([teamId, gameweekId, playerId])
+  @@index([gameweekId])
+  @@map("fantasy_gameweek_picks")
+}
+
+model FantasyTransfer {
+  id          String      @id @default(cuid())
+  teamId      String
+  gameweekId  String
+  playerOutId String
+  playerInId  String
+  priceOut    Int
+  priceIn     Int
+  cost        Int         @default(0)
+  isWildcard  Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  team        FantasyTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  gameweek    Gameweek    @relation(fields: [gameweekId], references: [id])
+  playerOut   Player      @relation("out", fields: [playerOutId], references: [id])
+  playerIn    Player      @relation("in", fields: [playerInId], references: [id])
+
+  @@index([teamId])
+  @@index([gameweekId])
+  @@map("fantasy_transfers")
+}
+
+model FantasyGameweekScore {
+  id                String      @id @default(cuid())
+  teamId            String
+  gameweekId        String
+  provisionalPoints Int         @default(0)
+  confirmedPoints   Int         @default(0)
+  transferCost      Int         @default(0)
+  transfersMade     Int         @default(0)
+  breakdown         Json?
+  updatedAt         DateTime    @updatedAt
+  team              FantasyTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  gameweek          Gameweek    @relation(fields: [gameweekId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, gameweekId])
+  @@index([gameweekId, provisionalPoints])
+  @@map("fantasy_gameweek_scores")
+}
+
+// ---------- competitions ----------
+
+model FantasyLeague {
+  id             String           @id @default(cuid())
+  seasonId       String
+  name           String
+  type           LeagueType
+  visibility     LeagueVisibility
+  code           String           @unique
+  ownerId        String?
+  isSystem       Boolean          @default(false)
+  startGameweek  Int              @default(1)
+  createdAt      DateTime         @default(now())
+  season         Season           @relation(fields: [seasonId], references: [id])
+  owner          User?            @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  members        LeagueMember[]
+  h2hMatches     HeadToHeadMatch[]
+  cups           FantasyCup[]
+
+  @@map("fantasy_leagues")
+}
+
+model LeagueMember {
+  id       String        @id @default(cuid())
+  leagueId String
+  teamId   String
+  joinedAt DateTime      @default(now())
+  league   FantasyLeague @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team     FantasyTeam   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([leagueId, teamId])
+  @@map("league_members")
+}
+
+model HeadToHeadMatch {
+  id             String        @id @default(cuid())
+  leagueId       String
+  gameweekNumber Int
+  gameweekId     String?
+  teamAId        String?
+  teamBId        String?
+  league         FantasyLeague @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  gameweek       Gameweek?     @relation(fields: [gameweekId], references: [id], onDelete: SetNull)
+
+  @@index([leagueId, gameweekNumber])
+  @@map("head_to_head_matches")
+}
+
+model FantasyCup {
+  id            String        @id @default(cuid())
+  seasonId      String
+  name          String
+  leagueId      String?
+  startGameweek Int
+  maxEntrants   Int
+  method        CupMethod
+  seed          Int
+  status        CupStatus     @default(DRAWN)
+  winnerTeamId  String?
+  createdAt     DateTime      @default(now())
+  season        Season        @relation(fields: [seasonId], references: [id])
+  league        FantasyLeague? @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  fixtures      CupFixture[]
+
+  @@map("fantasy_cups")
+}
+
+model CupFixture {
+  id             String     @id @default(cuid())
+  cupId          String
+  round          Int
+  roundName      String
+  gameweekNumber Int
+  slot           Int
+  teamAId        String?
+  teamBId        String?
+  seedA          Int?
+  seedB          Int?
+  scoreA         Int?
+  scoreB         Int?
+  winnerId       String?
+  cup            FantasyCup @relation(fields: [cupId], references: [id], onDelete: Cascade)
+
+  @@unique([cupId, round, slot])
+  @@map("cup_fixtures")
+}

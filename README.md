@@ -3,6 +3,7 @@
 Kiwanja is fantasy football for Ugandan football, built on its own live match data. It has two apps that share one backend and one database:
 
 - **Fantasy app** (`/`): squads, transfers, captains, live points, leagues, head-to-head, cups and match centre.
+- **Mobile app** (`apps/mobile`): the fantasy app for Android and iPhone, built with Expo.
 - **Data Ops app** (`/ops`): fixtures, line-ups, live event logging by match analysts, two-analyst verification, corrections, publishing, scoring rules, audit and export.
 
 > "Kiwanja" is a temporary working name. All clubs, players and matches in this build are **fictional sample data**. No real league, club or FPL branding is used.
@@ -33,6 +34,15 @@ The setup script does everything in order: checks Node, installs pnpm if it is m
 | Run all tests | **Ctrl+Shift+P → Tasks: Run Test Task**, or `pnpm test` |
 
 Already running PostgreSQL yourself? Put its address in `DATABASE_URL` in `apps/api/.env` and the Docker step is skipped.
+
+### Run the mobile app on your phone
+
+1. Install **Expo Go** from the Play Store or App Store.
+2. Make sure the API is running (the setup script starts it, or run the task **Kiwanja: Run apps**).
+3. In VS Code run the task **Kiwanja: Run mobile app (Expo Go)**, or `pnpm dev:mobile` in a second terminal.
+4. Scan the QR code with Expo Go (Android) or the Camera app (iPhone). Your phone and computer must be on the same Wi-Fi.
+
+The app finds the API on your computer automatically. If it can't connect, open **Me → Server** in the app and type your computer's Wi-Fi address, for example `http://192.168.1.20:4000`. On Windows, allow Node.js through the firewall on private networks when Windows asks. The task **Kiwanja: Run everything (API + web + mobile)** starts all three at once.
 
 ### Demo accounts
 
@@ -73,11 +83,14 @@ The whole scenario runs automatically as a test: `apps/api/test/liveGoal.e2e.tes
 ## How it fits together
 
 ```
-packages/core   Shared TypeScript: scoring engine, stat derivation, squad rules,
-                auto-subs, H2H and cups, permissions, validation schemas.
-                No database or UI, so the future mobile app can reuse it.
-apps/api        Express + Prisma (PostgreSQL) + Socket.IO
-apps/web        React + Vite + Tailwind + TanStack Query (both apps, split by route)
+packages/core    Shared rules: scoring engine, stat derivation, squad rules, auto-subs,
+                 H2H and cups, permissions, validation schemas. Used by the API and both apps.
+packages/client  Shared by web and mobile: API types and client, React Query hooks, live
+                 updates, formatting, and all team-editing logic (pick team, squad builder,
+                 transfers). Fix or improve it once and both apps get it.
+apps/api         Express + Prisma (PostgreSQL) + Socket.IO
+apps/web         React + Vite + Tailwind (fantasy app and Data Ops, split by route)
+apps/mobile      Expo (React Native) + Expo Router: the fantasy app for phones
 ```
 
 **Match events are kept separate from fantasy points.** Analysts write `match_events`, which are the source of truth. Everything after that is derived and can be rebuilt at any time:
@@ -126,7 +139,9 @@ Metrics are stored per source in `player_metrics`, separate from analyst events.
 
 ## Not built yet
 
-- A native mobile app. The web app works on phones, and `packages/core` is ready to share with a React Native client.
+- App store builds of the mobile app (`eas build`). It runs in Expo Go today.
+- Push notifications when the app is closed. Live alerts work while it is open.
+- The Data Ops analyst console on mobile. It works in a tablet browser.
 - Email delivery for password resets. In development the reset link is shown on screen.
 - Real club and player data. This needs agreements with data owners first.
 - Tracker hardware. The ingest API above is ready for it.

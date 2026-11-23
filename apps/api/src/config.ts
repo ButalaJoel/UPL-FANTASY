@@ -12,5 +12,5 @@ export const config = {
   port: Number(process.env.PORT ?? 4000),
   jwtSecret,
   jwtTtl: '7d',
-  webOrigin: (process.env.WEB_ORIGIN ?? 'http://localhost:5173').split(','),
+  webOrigin: (process.env.WEB_ORIGIN ?? 'http://localhost:5173,http://localhost:8081').split(','),
 };

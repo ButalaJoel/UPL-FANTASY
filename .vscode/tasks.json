@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Kiwanja: Setup and run (first time)",
+      "type": "shell",
+      "command": "node scripts/setup.mjs",
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "panel": "dedicated", "reveal": "always", "focus": true }
+    },
+    {
+      "label": "Kiwanja: Run apps",
+      "type": "shell",
+      "command": "pnpm dev",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "Kiwanja: Start database (Docker)",
+      "type": "shell",
+      "command": "docker compose up -d db",
+      "problemMatcher": []
+    },
+    {
+      "label": "Kiwanja: Reset database and sample data",
+      "type": "shell",
+      "command": "node scripts/setup.mjs --reset --no-dev",
+      "problemMatcher": []
+    },
+    {
+      "label": "Kiwanja: Run all tests",
+      "type": "shell",
+      "command": "pnpm test",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Kiwanja: Type check",
+      "type": "shell",
+      "command": "pnpm typecheck",
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}

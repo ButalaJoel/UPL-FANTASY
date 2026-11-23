@@ -1,0 +1,22 @@
+{
+  "name": "kiwanja",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Kiwanja: Uganda fantasy football + live match-data platform (prototype)",
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "pnpm --parallel --filter @kiwanja/api --filter @kiwanja/web dev",
+    "dev:api": "pnpm --filter @kiwanja/api dev",
+    "dev:web": "pnpm --filter @kiwanja/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @kiwanja/api test:e2e",
+    "db:up": "docker compose up -d db",
+    "db:migrate": "pnpm --filter @kiwanja/api db:migrate",
+    "db:seed": "pnpm --filter @kiwanja/api db:seed",
+    "db:reset": "pnpm --filter @kiwanja/api db:reset"
+  }
+}
